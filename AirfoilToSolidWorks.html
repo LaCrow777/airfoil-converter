@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Airfoil → SolidWorks XYZ</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#edf3f7;color:#173447;font:16px system-ui,Arial,sans-serif}
+main{max-width:1100px;margin:30px auto;padding:0 20px}h1{margin-bottom:4px}p{line-height:1.5}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}.card{background:white;border:1px solid #d1dce4;border-radius:12px;padding:22px}
+textarea{width:100%;height:360px;font:13px monospace;padding:12px;border:1px solid #b3c6d0;border-radius:6px}
+label{display:block;margin:13px 0;font-weight:600}input[type=number]{width:145px;padding:8px;font-size:16px}
+button{background:#087f8c;border:0;color:white;border-radius:7px;padding:12px 18px;font-size:16px;font-weight:700;cursor:pointer}
+button:disabled{opacity:.4;cursor:not-allowed}svg{width:100%;height:260px;background:#f8fbfc;border:1px solid #d1dce4}
+.small{font-size:13px;color:#506779}.error{color:#b32424}#status{min-height:40px}
+@media(max-width:750px){.grid{grid-template-columns:1fr}}
+</style></head><body><main>
+<h1>Airfoil → SolidWorks XYZ</h1><p>Paste a Selig-format airfoil .dat file, preview it, and export a space-separated XYZ .txt file for <b>Insert → Curve → Curve Through XYZ Points</b>. Runs locally in your browser.</p>
+<div class="grid"><section class="card"><h2>1 · Airfoil coordinates</h2>
+<input id="file" type="file" accept=".dat,.txt,text/plain">
+<p class="small">Selig format: optional airfoil name, then X Y coordinate pairs around the perimeter.</p>
+<textarea id="source" spellcheck="false" placeholder="NACA 6412&#10;1.00025 0.00124&#10;0.99758 0.00216&#10;..."></textarea>
+</section><section class="card"><h2>2 · Geometry options</h2>
+<label>Chord length (meters)<br><input id="chord" type="number" value="1" min="0.000001" step="any"></label>
+<label>Angle of attack (degrees)<br><input id="angle" type="number" value="0" step="any"></label>
+<label><input id="flip" type="checkbox"> Flip vertically (invert Y)</label>
+<p class="small">Recommendation: leave AoA at 0° here, then set the freestream direction in Fluent for angle sweeps. Positive AoA here rotates the airfoil counterclockwise, nose up.</p>
+<button id="preview">Update preview</button>
+<svg id="plot" viewBox="0 0 600 260" aria-label="Airfoil preview"></svg>
+<p id="status">Paste coordinates and click Update preview.</p>
+<button id="download" disabled>Download SolidWorks XYZ .txt</button>
+<p class="small">Output: exactly three space-separated columns (X Y Z), Z = 0, with meter suffixes, no tabs or header. The file uses the same delimiter and unit style as your working A18 file.</p>
+</section></div></main>
+<script>
+const $=id=>document.getElementById(id);
+let output=null;
+function parse(raw){
+ const lines=raw.replace(/^\uFEFF/,'').split(/\r?\n/), points=[];
+ for(let i=0;i<lines.length;i++){
+  const s=lines[i].trim();if(!s)continue;
+  const parts=s.split(/[\s,]+/);
+  if(parts.length===2 && parts.every(t=>Number.isFinite(Number(t)))){points.push(parts.map(Number));continue;}
+  if(points.length===0 && i<3 && !/^[-+0-9.]/.test(s))continue;
+  throw Error('Invalid Selig X Y coordinates on line '+(i+1)+': '+s);
+ }
+ if(points.length<3)throw Error('At least 3 coordinate pairs are required.');
+ return points;
+}
+function build(){
+ const pts=parse($('source').value), chord=Number($('chord').value), angle=Number($('angle').value);
+ if(!Number.isFinite(chord)||chord<=0)throw Error('Chord must be positive.');
+ if(!Number.isFinite(angle))throw Error('Angle must be a number.');
+ const xs=pts.map(p=>p[0]), range=Math.max(...xs)-Math.min(...xs);
+ if(range<=0)throw Error('X coordinates must span a nonzero chord.');
+ const xmin=Math.min(...xs), t=angle*Math.PI/180, c=Math.cos(t),s=Math.sin(t), flip=$('flip').checked;
+ const transformed=pts.map(([x,y])=>{
+  const X=(x-xmin)*chord/range, Y=y*chord/range*(flip?-1:1);
+  return [X*c-Y*s,X*s+Y*c,0];
+ });
+ const fmt=n=>{const z=Math.abs(n)<5e-13?0:n;return z.toFixed(9).replace(/0+$/,'').replace(/\.$/,'')+'m';};
+ const data=transformed.map(p=>p.map(fmt).join(' ')).join('\r\n')+'\r\n';
+ return {transformed,data};
+}
+function draw(pts){
+ const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]);
+ const xmin=Math.min(...xs),xmax=Math.max(...xs),ymin=Math.min(...ys),ymax=Math.max(...ys);
+ const dx=Math.max(xmax-xmin,1e-9),dy=Math.max(ymax-ymin,dx*.12);
+ const sc=Math.min(540/dx,200/dy);
+ const xy=p=>[(p[0]-(xmin+xmax)/2)*sc+300,130-(p[1]-(ymin+ymax)/2)*sc];
+ const points=pts.map(xy).map(p=>p.join(',')).join(' ');
+ $('plot').innerHTML='<line x1="20" y1="130" x2="580" y2="130" stroke="#d8e3e9" stroke-dasharray="5 5"/><polyline points="'+points+'" fill="none" stroke="#087f8c" stroke-width="2.5" stroke-linejoin="round"/>';
+}
+function update(){
+ try{output=build();draw(output.transformed);$('download').disabled=false;
+ $('status').className='';$('status').textContent=output.transformed.length+' points ready. Units: meters. X Y Z separated by spaces.';}
+ catch(e){output=null;$('download').disabled=true;$('plot').innerHTML='';$('status').className='error';$('status').textContent=e.message;}
+}
+$('preview').onclick=update;
+$('source').addEventListener('input',update);
+for(const id of ['chord','angle','flip'])$(id).addEventListener('change',update);
+$('file').addEventListener('change',async e=>{const f=e.target.files[0];if(f){$('source').value=await f.text();update();}});
+$('download').onclick=()=>{if(!output)return;const url=URL.createObjectURL(new Blob([output.data],{type:'text/plain;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='airfoil_SolidWorks_XYZ.txt';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+</script></body></html>
